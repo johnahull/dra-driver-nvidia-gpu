@@ -92,6 +92,7 @@ type VfioDeviceInfo struct {
 	pcieRootAttr           *deviceattribute.DeviceAttribute
 	numaNode               int
 	iommuGroup             int
+	iommuFDEnabled         bool
 	addressableMemoryBytes uint64
 }
 
@@ -275,6 +276,9 @@ func (d *VfioDeviceInfo) GetDevice() resourceapi.Device {
 			}(),
 			"productName": {
 				StringValue: &d.productName,
+			},
+			"iommuFDEnabled": {
+				BoolValue: ptr.To(d.iommuFDEnabled),
 			},
 		},
 		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{

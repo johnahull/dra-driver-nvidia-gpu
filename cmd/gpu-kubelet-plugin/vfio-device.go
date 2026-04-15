@@ -26,8 +26,6 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
-	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
-	cdispec "tags.cncf.io/container-device-interface/specs-go"
 )
 
 const (
@@ -36,9 +34,11 @@ const (
 	vfioPciDriver          = "vfio-pci"
 	nvidiaDriver           = "nvidia"
 	hostRoot               = "/host-root"
-	sysModulesRoot         = "/sys/module"
-	pciDevicesRoot         = "/sys/bus/pci/devices"
+	sysModulePath          = "/sys/module"
+	pciDevicesPath         = "/sys/bus/pci/devices"
 	vfioDevicesRoot        = "/dev/vfio"
+	vfioDevicesPath        = "/dev/vfio/devices"
+	iommuDevicePath        = "/dev/iommu"
 	unbindFromDriverScript = "/usr/bin/unbind_from_driver.sh"
 	bindToDriverScript     = "/usr/bin/bind_to_driver.sh"
 	gpuFreeCheckInterval   = 1 * time.Second
@@ -129,7 +129,7 @@ func (vm *VfioPciManager) Configure(ctx context.Context, info *VfioDeviceInfo) e
 	perGpuLock.Get(info.PciBusID).Lock()
 	defer perGpuLock.Get(info.PciBusID).Unlock()
 
-	driver, err := getDriver(pciDevicesRoot, info.PciBusID)
+	driver, err := getDriver(pciDevicesPath, info.PciBusID)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (vm *VfioPciManager) Unconfigure(ctx context.Context, info *VfioDeviceInfo)
 		return nil
 	}
 
-	driver, err := getDriver(pciDevicesRoot, info.PciBusID)
+	driver, err := getDriver(pciDevicesPath, info.PciBusID)
 	if err != nil {
 		return err
 	}
@@ -183,8 +183,8 @@ func (vm *VfioPciManager) Unconfigure(ctx context.Context, info *VfioDeviceInfo)
 	return vm.changeDriver(info.PciBusID, nvidiaDriver)
 }
 
-func getDriver(pciDevicesRoot, pciAddress string) (string, error) {
-	driverPath, err := os.Readlink(filepath.Join(pciDevicesRoot, pciAddress, "driver"))
+func getDriver(pciDevicesPath, pciAddress string) (string, error) {
+	driverPath, err := os.Readlink(filepath.Join(pciDevicesPath, pciAddress, "driver"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -225,39 +225,9 @@ func (vm *VfioPciManager) bindToDriver(pciAddress, driver string) error {
 	return nil
 }
 
-func GetVfioCommonCDIContainerEdits() *cdiapi.ContainerEdits {
-	return &cdiapi.ContainerEdits{
-		ContainerEdits: &cdispec.ContainerEdits{
-			DeviceNodes: []*cdispec.DeviceNode{
-				{
-					Path: filepath.Join(vfioDevicesRoot, "vfio"),
-				},
-			},
-			// Make sure that NVIDIA_VISIBLE_DEVICES is set to void to avoid the
-			// nvidia-container-runtime honoring it in addition to the underlying
-			// runtime honoring CDI.
-			Env: []string{"NVIDIA_VISIBLE_DEVICES=void"},
-		},
-	}
-}
-
-// GetCDIContainerEdits returns the CDI spec for a container to have access to the GPU while bound on vfio-pci driver.
-func GetVfioCDIContainerEdits(info *VfioDeviceInfo) *cdiapi.ContainerEdits {
-	vfioDevicePath := filepath.Join(vfioDevicesRoot, fmt.Sprintf("%d", info.iommuGroup))
-	return &cdiapi.ContainerEdits{
-		ContainerEdits: &cdispec.ContainerEdits{
-			DeviceNodes: []*cdispec.DeviceNode{
-				{
-					Path: vfioDevicePath,
-				},
-			},
-		},
-	}
-}
-
 // Check if the vfio_pci module is loaded.
 func checkVfioPCIModuleLoaded() (bool, error) {
-	f, err := os.Stat(filepath.Join(sysModulesRoot, vfioPciModule))
+	f, err := os.Stat(filepath.Join(hostRoot, sysModulePath, vfioPciModule))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -284,7 +254,7 @@ func loadVfioPciModule() error {
 
 // Check if IOMMU is enabled.
 func checkIommuEnabled() (bool, error) {
-	f, err := os.Open(kernelIommuGroupPath)
+	f, err := os.Open(filepath.Join(hostRoot, kernelIommuGroupPath))
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -300,6 +270,20 @@ func checkIommuEnabled() (bool, error) {
 		return false, err
 	}
 
+	return true, nil
+}
+
+// Check if IOMMUFD is enabled.
+// We correlate the IOMMUFD support with the presence of the /dev/iommu API device.
+func checkIommuFDEnabled() (bool, error) {
+	_, err := os.Stat(filepath.Join(hostRoot, iommuDevicePath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			klog.Infof("IOMMUFD is not enabled, /dev/iommu device node does not exist")
+			return false, nil
+		}
+		return false, fmt.Errorf("error checking if iommu device node exists: %w", err)
+	}
 	return true, nil
 }
 
