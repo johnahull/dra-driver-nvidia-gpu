@@ -179,6 +179,20 @@ func CommonAttributesMig(parent *GpuInfo, profileName string) map[resourceapi.Qu
 		attrs[parent.pcieRootAttr.Name] = parent.pcieRootAttr.Value
 	}
 
+	// Standardized topology attributes from sysfs
+	if parent.pciBusID != "" {
+		if numa, err := getNUMANodeByPCIBusID(parent.pciBusID); err == nil {
+			attrs["resource.kubernetes.io/numaNode"] = resourceapi.DeviceAttribute{
+				IntValue: ptr.To(int64(numa)),
+			}
+			if socket, err := getSocketByNUMANode(numa); err == nil {
+				attrs["resource.kubernetes.io/cpuSocketID"] = resourceapi.DeviceAttribute{
+					IntValue: ptr.To(int64(socket)),
+				}
+			}
+		}
+	}
+
 	return attrs
 }
 

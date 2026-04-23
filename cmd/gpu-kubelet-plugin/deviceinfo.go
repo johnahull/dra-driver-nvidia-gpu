@@ -190,6 +190,20 @@ func (d *GpuInfo) Attributes() map[resourceapi.QualifiedName]resourceapi.DeviceA
 		}
 	}
 
+	// Standardized topology attributes from sysfs
+	if d.pciBusID != "" {
+		if numa, err := getNUMANodeByPCIBusID(d.pciBusID); err == nil {
+			attrs["resource.kubernetes.io/numaNode"] = resourceapi.DeviceAttribute{
+				IntValue: ptr.To(int64(numa)),
+			}
+			if socket, err := getSocketByNUMANode(numa); err == nil {
+				attrs["resource.kubernetes.io/cpuSocketID"] = resourceapi.DeviceAttribute{
+					IntValue: ptr.To(int64(socket)),
+				}
+			}
+		}
+	}
+
 	return attrs
 }
 
@@ -250,6 +264,15 @@ func (d *VfioDeviceInfo) GetDevice() resourceapi.Device {
 			"numa": {
 				IntValue: ptr.To(int64(d.numaNode)),
 			},
+			"resource.kubernetes.io/numaNode": {
+				IntValue: ptr.To(int64(d.numaNode)),
+			},
+			"resource.kubernetes.io/cpuSocketID": func() resourceapi.DeviceAttribute {
+				if socket, err := getSocketByNUMANode(d.numaNode); err == nil {
+					return resourceapi.DeviceAttribute{IntValue: ptr.To(int64(socket))}
+				}
+				return resourceapi.DeviceAttribute{IntValue: ptr.To(int64(-1))}
+			}(),
 			"productName": {
 				StringValue: &d.productName,
 			},
