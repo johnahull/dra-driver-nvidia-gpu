@@ -124,7 +124,7 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.VersionedSpecs{
 		{
 			Default:    false,
 			PreRelease: featuregate.Alpha,
-			Version:    version.MajorMinor(26, 4),
+			Version:    version.MajorMinor(25, 12),
 		},
 	},
 }
