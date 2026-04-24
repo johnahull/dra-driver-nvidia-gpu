@@ -140,6 +140,11 @@ func (vm *VfioPciManager) Configure(ctx context.Context, info *VfioDeviceInfo) e
 	if !vm.nvidiaEnabled || driver != nvidiaDriver {
 		return fmt.Errorf("gpu is bound to %q driver, expected %q or %q", driver, vm.driver, nvidiaDriver)
 	}
+	// Shut down NVML to release /dev/nvidia* file descriptors held by this
+	// process. Without this, the GPU device node stays busy and unbind blocks
+	// indefinitely. NVML will be re-initialized on the next ensureNVML() call.
+	klog.Infof("Shutting down NVML before VFIO bind for %s", info.PciBusID)
+	vm.nvlib.alwaysShutdown()
 	err = vm.WaitForGPUFree(ctx, info)
 	if err != nil {
 		return err
