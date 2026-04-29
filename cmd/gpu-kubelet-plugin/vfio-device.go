@@ -136,6 +136,12 @@ func (vm *VfioPciManager) Configure(ctx context.Context, info *VfioDeviceInfo) e
 	if driver == vm.driver {
 		return nil
 	}
+
+	if driver == "" {
+		klog.Infof("GPU %s has no driver bound, binding directly to %s", info.PciBusID, vm.driver)
+		return vm.bindToDriver(info.PciBusID, vm.driver)
+	}
+
 	// Only support vfio-pci or nvidia (if vm.nvidiaEnabled) driver.
 	if !vm.nvidiaEnabled || driver != nvidiaDriver {
 		return fmt.Errorf("gpu is bound to %q driver, expected %q or %q", driver, vm.driver, nvidiaDriver)
@@ -148,11 +154,7 @@ func (vm *VfioPciManager) Configure(ctx context.Context, info *VfioDeviceInfo) e
 	if err != nil {
 		return err
 	}
-	err = vm.changeDriver(info.PciBusID, vm.driver)
-	if err != nil {
-		return err
-	}
-	return nil
+	return vm.changeDriver(info.PciBusID, vm.driver)
 }
 
 // Unconfigure binds the GPU to the nvidia driver.
@@ -172,16 +174,21 @@ func (vm *VfioPciManager) Unconfigure(ctx context.Context, info *VfioDeviceInfo)
 	if driver == nvidiaDriver {
 		return nil
 	}
-	err = vm.changeDriver(info.PciBusID, nvidiaDriver)
-	if err != nil {
-		return err
+
+	if driver == "" {
+		klog.Infof("GPU %s has no driver bound, binding directly to %s", info.PciBusID, nvidiaDriver)
+		return vm.bindToDriver(info.PciBusID, nvidiaDriver)
 	}
-	return nil
+
+	return vm.changeDriver(info.PciBusID, nvidiaDriver)
 }
 
 func getDriver(pciDevicesRoot, pciAddress string) (string, error) {
 	driverPath, err := os.Readlink(filepath.Join(pciDevicesRoot, pciAddress, "driver"))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
 		return "", err
 	}
 	_, driver := filepath.Split(driverPath)
