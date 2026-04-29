@@ -196,14 +196,40 @@ func getDriver(pciDevicesPath, pciAddress string) (string, error) {
 }
 
 func (vm *VfioPciManager) changeDriver(pciAddress, driver string) error {
-	err := vm.unbindFromDriver(pciAddress)
-	if err != nil {
-		return err
+	// Use driver_override + drivers_probe instead of explicit unbind + bind.
+	// Explicit unbind hangs on H100 SXM5 with NVLink because the nvidia
+	// driver blocks during NVLink fabric reconfiguration.
+	overridePath := filepath.Join(pciDevicesPath, pciAddress, "driver_override")
+	if err := os.WriteFile(overridePath, []byte(driver), 0644); err != nil {
+		return fmt.Errorf("failed to set driver_override for %s: %w", pciAddress, err)
 	}
-	err = vm.bindToDriver(pciAddress, driver)
-	if err != nil {
-		return err
+
+	// Unbind from current driver
+	driverSymlink := filepath.Join(pciDevicesPath, pciAddress, "driver")
+	if target, err := os.Readlink(driverSymlink); err == nil {
+		currentDriver := filepath.Base(target)
+		unbindPath := filepath.Join("/sys/bus/pci/drivers", currentDriver, "unbind")
+		klog.Infof("Unbinding %s from %s", pciAddress, currentDriver)
+		if err := os.WriteFile(unbindPath, []byte(pciAddress), 0644); err != nil {
+			klog.Warningf("Unbind failed for %s (trying drivers_probe): %v", pciAddress, err)
+		}
 	}
+
+	// Bind to new driver
+	bindPath := filepath.Join("/sys/bus/pci/drivers", driver, "bind")
+	if err := os.WriteFile(bindPath, []byte(pciAddress), 0644); err != nil {
+		// If bind fails, try drivers_probe as fallback
+		klog.Warningf("Direct bind failed for %s, trying drivers_probe: %v", pciAddress, err)
+		probePath := "/sys/bus/pci/drivers_probe"
+		if probeErr := os.WriteFile(probePath, []byte(pciAddress), 0644); probeErr != nil {
+			// Clear override on failure
+			_ = os.WriteFile(overridePath, []byte(""), 0644)
+			return fmt.Errorf("failed to bind %s to %s: bind: %v, probe: %v", pciAddress, driver, err, probeErr)
+		}
+	}
+
+	// Clear driver_override
+	_ = os.WriteFile(overridePath, []byte(""), 0644)
 	return nil
 }
 
