@@ -204,31 +204,41 @@ func (vm *VfioPciManager) changeDriver(pciAddress, driver string) error {
 		return fmt.Errorf("failed to set driver_override for %s: %w", pciAddress, err)
 	}
 
-	// Unbind from current driver
+	// Unbind from current driver with timeout — nvidia unbind on H100 SXM5
+	// can hang indefinitely due to NVLink fabric reconfiguration.
 	driverSymlink := filepath.Join(pciDevicesPath, pciAddress, "driver")
 	if target, err := os.Readlink(driverSymlink); err == nil {
 		currentDriver := filepath.Base(target)
 		unbindPath := filepath.Join("/sys/bus/pci/drivers", currentDriver, "unbind")
-		klog.Infof("Unbinding %s from %s", pciAddress, currentDriver)
-		if err := os.WriteFile(unbindPath, []byte(pciAddress), 0644); err != nil {
-			klog.Warningf("Unbind failed for %s (trying drivers_probe): %v", pciAddress, err)
+		klog.Infof("Unbinding %s from %s (with 30s timeout)", pciAddress, currentDriver)
+
+		done := make(chan error, 1)
+		go func() {
+			done <- os.WriteFile(unbindPath, []byte(pciAddress), 0644)
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				klog.Warningf("Unbind failed for %s: %v", pciAddress, err)
+			} else {
+				klog.Infof("Unbind succeeded for %s", pciAddress)
+			}
+		case <-time.After(30 * time.Second):
+			klog.Warningf("Unbind timed out for %s after 30s, continuing with bind", pciAddress)
 		}
 	}
 
 	// Bind to new driver
 	bindPath := filepath.Join("/sys/bus/pci/drivers", driver, "bind")
 	if err := os.WriteFile(bindPath, []byte(pciAddress), 0644); err != nil {
-		// If bind fails, try drivers_probe as fallback
 		klog.Warningf("Direct bind failed for %s, trying drivers_probe: %v", pciAddress, err)
 		probePath := "/sys/bus/pci/drivers_probe"
 		if probeErr := os.WriteFile(probePath, []byte(pciAddress), 0644); probeErr != nil {
-			// Clear override on failure
 			_ = os.WriteFile(overridePath, []byte(""), 0644)
 			return fmt.Errorf("failed to bind %s to %s: bind: %v, probe: %v", pciAddress, driver, err, probeErr)
 		}
 	}
 
-	// Clear driver_override
 	_ = os.WriteFile(overridePath, []byte(""), 0644)
 	return nil
 }
