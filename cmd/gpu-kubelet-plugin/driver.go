@@ -342,13 +342,10 @@ func (d *driver) HandleError(ctx context.Context, err error, msg string) {
 
 func (d *driver) nodePrepareResource(ctx context.Context, claim *resourceapi.ResourceClaim) kubeletplugin.PrepareResult {
 	t0 := time.Now()
-	// Instead of a global prepare/unprepare (PU) lock, we could rely on
-	// fine-grained checkpoint locking, which was proven to work correctly in
-	// case of DynamicMIG mode. However, out of caution, retain this global PU
-	// lock for now in all modes (re-evaluate the performance impact at a later
-	// time).
-
-	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(10*time.Second))
+	// Global lock for prepare/unprepare serialization. Timeout must exceed
+	// WaitForGPUFree timeout (60s) to avoid deadlock when VFIO bind waits
+	// for GPU device handles to be released.
+	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(120*time.Second))
 	if err != nil {
 		drametrics.IncNodePrepareError(DriverName, "lock_acquire")
 		return kubeletplugin.PrepareResult{
@@ -390,7 +387,7 @@ func (d *driver) nodePrepareResource(ctx context.Context, claim *resourceapi.Res
 func (d *driver) nodeUnprepareResource(ctx context.Context, claimRef kubeletplugin.NamespacedObject) error {
 	t0 := time.Now()
 
-	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(10*time.Second))
+	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(120*time.Second))
 	if err != nil {
 		drametrics.IncNodeUnprepareError(DriverName, "lock_acquire")
 		return fmt.Errorf("error acquiring prep/unprep lock: %w", err)
